@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Fast Food Strike: CROSS-PLATFORM TITANS</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: 'Arial Black', sans-serif; color: white; user-select: none; touch-action: none; }
+        .screen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; 
+            background: linear-gradient(rgba(0,0,0,0.6), rgba(0,0,0,0.6)), url('https://media.sketchfab.com/models/346ebe0033ba48f7bc2e10d44a5b482f/thumbnails/7ded7cf7b6144c139429a70324e9dc45/3f5e546d62154f2c81b5b8a31bc10e41.jpeg'); 
+            background-size: cover; background-position: center; }
+        .menu-box { background: rgba(0,0,0,0.9); padding: 30px; border-radius: 20px; border: 3px solid #ff9000; text-align: center; box-shadow: 0 0 20px rgba(255,144,0,0.5); }
+        .btn { padding: 15px; color: white; border: none; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer; margin: 10px; width: 280px; text-transform: uppercase; transition: 0.1s; }
+        .btn:active { transform: scale(0.95); }
+        input { padding: 15px; font-size: 16px; border-radius: 8px; width: 250px; margin: 10px; background: #111; color: #fff; border: 1px solid #ff9000; text-align: center; }
+        #game-ui { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 50; display: none; }
+        #crosshair { position: fixed; top: 50%; left: 50%; width: 20px; height: 20px; transform: translate(-50%, -50%); pointer-events: none; z-index: 60; }
+        #crosshair::before, #crosshair::after { content: ''; position: absolute; background: #0f0; border-radius: 2px; }
+        #crosshair::before { top: 9px; left: 0; width: 20px; height: 3px; }
+        #crosshair::after { top: 0; left: 9px; width: 3px; height: 20px; }
+        #copy-panel { position: absolute; top: 15px; left: 15px; background: rgba(0,0,0,0.8); padding: 10px 15px; border: 2px solid #ff9000; border-radius: 12px; pointer-events: auto; cursor: pointer; text-align: center; }
+        #hp-bar { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); width: 220px; height: 18px; background: #333; border: 2px solid #fff; border-radius: 10px; overflow: hidden; }
+        #hp-fill { width: 100%; height: 100%; background: #0f0; transition: 0.2s; }
+        
+        /* Мобильные элементы */
+        #mobile-controls { display: none; }
+        #joystick { position: absolute; bottom: 40px; left: 40px; width: 120px; height: 120px; background: rgba(255,255,255,0.1); border: 2px solid #fff; border-radius: 50%; pointer-events: auto; }
+        #stick { position: absolute; top: 40px; left: 40px; width: 40px; height: 40px; background: #fff; border-radius: 50%; }
+        .action-btn { position: absolute; width: 90px; height: 90px; border-radius: 50%; border: 4px solid #fff; pointer-events: auto; display: flex; align-items: center; justify-content: center; font-size: 35px; box-shadow: 0 5px 10px rgba(0,0,0,0.3); }
+        #attack-btn { bottom: 150px; right: 40px; background: rgba(255,60,0,0.8); }
+        #jump-btn { bottom: 45px; right: 145px; background: rgba(0,150,255,0.8); }
+        
+        #death-screen { display: none; background: rgba(150,0,0,0.85); z-index: 200; }
+    </style>
+</head>
+<body>
+    <div id="lobby-screen" class="screen"><div class="menu-box"><h1 style="color: #ff9000;">HAMBURGER STRIKE</h1><input type="text" id="nick-input" placeholder="ТВОЙ НИКНЕЙМ"><input type="text" id="join-id" placeholder="ID ЛОББИ ДЛЯ ВХОДА"><button class="btn" style="background: #ff9000;" onclick="startLobby(true)">СОЗДАТЬ СЕРВЕР</button><button class="btn" style="background: #333;" onclick="startLobby(false)">ПРИСОЕДИНИТЬСЯ</button></div></div>
+    <div id="team-screen" class="screen" style="display:none;"><div class="menu-box"><h2>ВЫБЕРИ СВОЮ ИМПЕРИЮ</h2><button class="btn" style="background:#502d16; color:#ed7801; border: 3px solid #f5ebdc;" onclick="selectTeam('BK')">BURGER KING</button><button class="btn" style="background:#bd0017; color:#ffbc0d; border: 3px solid #ffbc0d;" onclick="selectTeam('MCD')">McDONALD'S</button></div></div>
+    <div id="death-screen" class="screen"><div class="menu-box"><h1 style="font-size: 45px;">ВЫ УМЕРЛИ</h1><button class="btn" style="background: #ff9000;" onclick="respawn()">ВОЗРОДИТЬСЯ</button></div></div>
+    <div id="game-ui">
+        <div id="crosshair"></div>
+        <div id="copy-panel" onclick="copyID()"><span style="font-size: 10px; color: #ff9000; display: block;">ID ЛОББИ:</span><span id="id-text" style="font-size: 18px; color: #fff;">...</span><div style="font-size: 9px; color: #aaa; margin-top: 3px;">(КЛИКНИ)</div></div>
+        <div id="hp-bar"><div id="hp-fill"></div></div>
+        <div id="mobile-controls">
+            <div id="joystick"><div id="stick"></div></div>
+            <div id="attack-btn" class="action-btn">⚡</div>
+            <div id="jump-btn" class="action-btn">⬆️</div>
+        </div>
+    </div>
+
+    <script type="importmap">{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }</script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+        let scene, camera, renderer, mapModel, peer, conn, myNick;
+        let moveDir = { x: 0, z: 0 }, yaw = 0, pitch = 0;
+        let otherPlayers = {};
+        let myTeam = null, myHP = 100, isDead = false;
+        let vy = 0, onGround = false;
+        const pHeight = 200, pSpeed = 16, gravity = -0.7, jumpPower = 14;
+        const loader = new GLTFLoader();
+
+        // Определение ПК или Мобилка
+        const isMobile = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+        if(isMobile) document.getElementById('mobile-controls').style.display = 'block';
+
+        window.startLobby = (isHost) => {
+            myNick = document.getElementById('nick-input').value.trim() || "Игрок";
+            initPeer(isHost ? null : document.getElementById('join-id').value.trim());
+            document.getElementById('lobby-screen').style.display = 'none';
+            document.getElementById('team-screen').style.display = 'flex';
+        };
+
+        window.selectTeam = (team) => {
+            myTeam = team;
+            document.getElementById('team-screen').style.display = 'none';
+            document.getElementById('game-ui').style.display = 'block';
+            initThree();
+            if(!isMobile) renderer.domElement.requestPointerLock();
+        };
+
+        window.copyID = () => {
+            const id = document.getElementById('id-text').innerText;
+            if (id && id !== "...") navigator.clipboard.writeText(id).then(() => alert("ID скопирован!"));
+        };
+
+        function initPeer(targetId) {
+            peer = new Peer();
+            peer.on('open', (id) => {
+                document.getElementById('id-text').innerText = id;
+                if(targetId) { conn = peer.connect(targetId); setupConn(); }
+            });
+            peer.on('connection', (c) => { conn = c; setupConn(); });
+        }
+
+        function setupConn() {
+            conn.on('data', (data) => {
+                if(data.type === 'move') updateOtherPlayer(data);
+                if(data.type === 'hit' && data.targetId === peer.id) takeDamage(10);
+                if(data.type === 'spark') createSparks(data.pos, false);
+            });
+        }
+
+        function initThree() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87ceeb);
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 1, 100000);
+            camera.rotation.order = 'YXZ';
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+            scene.add(new THREE.AmbientLight(0xffffff, 2.5));
+
+            loader.load('de_dust2_-_cs_map.glb', (gltf) => {
+                mapModel = gltf.scene;
+                mapModel.scale.set(250, 250, 250);
+                const box = new THREE.Box3().setFromObject(mapModel);
+                mapModel.position.sub(box.getCenter(new THREE.Vector3()));
+                scene.add(mapModel);
+                respawn();
+            });
+            setupControls();
+            animate();
+        }
+
+        window.respawn = () => {
+            isDead = false; myHP = 100; vy = 0;
+            document.getElementById('hp-fill').style.width = "100%";
+            document.getElementById('death-screen').style.display = 'none';
+            camera.position.set(0, 500, myTeam === 'BK' ? 2600 : -2600);
+            yaw = (myTeam === 'BK') ? 0 : Math.PI;
+        };
+
+        function takeDamage(dmg) {
+            if(isDead) return;
+            myHP -= dmg;
+            document.getElementById('hp-fill').style.width = myHP + "%";
+            if(myHP <= 0) { isDead = true; document.getElementById('death-screen').style.display = 'flex'; if(!isMobile) document.exitPointerLock(); }
+        }
+
+        function updateOtherPlayer(data) {
+            if(!otherPlayers[data.id]) {
+                const group = new THREE.Group();
+                scene.add(group);
+                const nick = createNickLabel(data.nick);
+                scene.add(nick);
+                otherPlayers[data.id] = { model: group, label: nick, team: data.team };
+                const file = data.team === 'BK' ? 'burgerking.glb' : 'fripotato.glb';
+                loader.load(file, (gltf) => {
+                    const m = gltf.scene;
+                    data.team === 'BK' ? m.scale.set(400, 400, 400) : m.scale.set(4800, 4800, 4800);
+                    group.add(m);
+                });
+            } else {
+                const p = otherPlayers[data.id];
+                p.model.position.set(data.pos.x, data.pos.y - pHeight, data.pos.z);
+                p.model.rotation.y = data.yaw;
+                p.label.position.set(data.pos.x, data.pos.y + 250, data.pos.z);
+            }
+        }
+
+        function createNickLabel(text) {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = 512; canvas.height = 128;
+            ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 0, 512, 128);
+            ctx.font = 'bold 70px Arial'; ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.fillText(text, 256, 90);
+            const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas) }));
+            sprite.scale.set(200, 50, 1); return sprite;
+        }
+
+        function createSparks(pos, isMine) {
+            const pGeo = new THREE.SphereGeometry(2.5, 4, 4);
+            const pMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+            for(let i=0; i<10; i++) {
+                const p = new THREE.Mesh(pGeo, pMat); p.position.copy(pos); scene.add(p);
+                const v = new THREE.Vector3((Math.random()-0.5)*35, (Math.random()-0.5)*35, (Math.random()-0.5)*35);
+                const loop = setInterval(() => { p.position.add(v); p.scale.multiplyScalar(0.9); if(p.scale.x < 0.1){ scene.remove(p); clearInterval(loop); } }, 30);
+            }
+            if(isMine && conn && conn.open) {
+                conn.send({ type: 'spark', pos: pos });
+                Object.keys(otherPlayers).forEach(id => {
+                    if(otherPlayers[id].team !== myTeam && pos.distanceTo(otherPlayers[id].model.position) < 320) conn.send({ type: 'hit', targetId: id });
+                });
+            }
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            if(!isDead && mapModel) {
+                vy += gravity; camera.position.y += vy;
+                if (camera.position.y < -3000) respawn();
+
+                const downRay = new THREE.Raycaster(camera.position, new THREE.Vector3(0,-1,0));
+                const hits = downRay.intersectObject(mapModel, true);
+                if(hits.length > 0) {
+                    const floorY = hits[0].point.y + pHeight;
+                    if(camera.position.y <= floorY) { camera.position.y = floorY; vy = 0; onGround = true; } else { onGround = false; }
+                }
+
+                if(moveDir.x || moveDir.z) {
+                    const forward = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
+                    forward.y = 0; forward.normalize();
+                    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0,1,0)).normalize();
+                    const oldPos = camera.position.clone();
+                    camera.position.addScaledVector(forward, -moveDir.z * pSpeed);
+                    camera.position.addScaledVector(right, moveDir.x * pSpeed);
+                    const sideRay = new THREE.Raycaster(oldPos, camera.position.clone().sub(oldPos).normalize(), 0, 70);
+                    if(sideRay.intersectObject(mapModel, true).length > 0) camera.position.copy(oldPos);
+                }
+                if(conn && conn.open) conn.send({ type: 'move', id: peer.id, nick: myNick, team: myTeam, pos: camera.position, yaw: yaw });
+            }
+            renderer.render(scene, camera);
+        }
+
+        function setupControls() {
+            if(isMobile) {
+                const j = document.getElementById('joystick'), s = document.getElementById('stick');
+                j.ontouchmove = (e) => {
+                    const r = j.getBoundingClientRect(); const t = e.touches[0];
+                    const dx = t.clientX - (r.left + 60), dy = t.clientY - (r.top + 60);
+                    const d = Math.min(Math.sqrt(dx*dx + dy*dy), 40); const a = Math.atan2(dy, dx);
+                    s.style.transform = `translate(${Math.cos(a)*d}px, ${Math.sin(a)*d}px)`;
+                    moveDir = { x: Math.cos(a)*(d/40), z: Math.sin(a)*(d/40) };
+                };
+                j.ontouchend = () => { s.style.transform = 'translate(0,0)'; moveDir = {x:0, z:0}; };
+                document.getElementById('jump-btn').ontouchstart = () => { if(onGround && !isDead) vy = jumpPower; };
+                document.getElementById('attack-btn').ontouchstart = () => {
+                    if(!isDead) createSparks(camera.position.clone().add(new THREE.Vector3(0,-60,-120).applyQuaternion(camera.quaternion)), true);
+                };
+                let lx = 0, ly = 0;
+                window.addEventListener('touchstart', (e) => { if(e.touches[0].clientX > window.innerWidth/2){ lx=e.touches[0].clientX; ly=e.touches[0].clientY; }});
+                window.addEventListener('touchmove', (e) => {
+                    const t = Array.from(e.touches).find(t => t.clientX > window.innerWidth/2);
+                    if(t) { yaw -= (t.clientX - lx) * 0.003; pitch = Math.max(-1.5, Math.min(1.5, pitch - (t.clientY - ly) * 0.003)); camera.rotation.set(pitch, yaw, 0, 'YXZ'); lx = t.clientX; ly = t.clientY; }
+                });
+            } else {
+                // ПК УПРАВЛЕНИЕ
+                const keys = {};
+                window.addEventListener('keydown', (e) => { keys[e.code] = true; if(e.code === 'Space' && onGround && !isDead) vy = jumpPower; });
+                window.addEventListener('keyup', (e) => keys[e.code] = false);
+                window.addEventListener('mousemove', (e) => {
+                    if (document.pointerLockElement === renderer.domElement) {
+                        yaw -= e.movementX * 0.002;
+                        pitch = Math.max(-1.5, Math.min(1.5, pitch - e.movementY * 0.002));
+                        camera.rotation.set(pitch, yaw, 0, 'YXZ');
+                    }
+                });
+                window.addEventListener('mousedown', () => {
+                    if (document.pointerLockElement !== renderer.domElement) renderer.domElement.requestPointerLock();
+                    else if(!isDead) createSparks(camera.position.clone().add(new THREE.Vector3(0,-60,-120).applyQuaternion(camera.quaternion)), true);
+                });
+                setInterval(() => {
+                    moveDir.z = (keys['KeyW'] ? -1 : 0) + (keys['KeyS'] ? 1 : 0);
+                    moveDir.x = (keys['KeyA'] ? -1 : 0) + (keys['KeyD'] ? 1 : 0);
+                }, 1000/60);
+            }
+        }
+    </script>
+</body>
+</html>
