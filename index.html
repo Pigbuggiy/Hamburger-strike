@@ -23,6 +23,7 @@
         #hp-bar { position: absolute; top: 20px; left: 50%; transform: translateX(-50%); width: 220px; height: 18px; background: #333; border: 2px solid #fff; border-radius: 10px; overflow: hidden; }
         #hp-fill { width: 100%; height: 100%; background: #0f0; transition: 0.2s; }
         
+        
         /* Мобильные элементы */
         #mobile-controls { display: none; }
         #joystick { position: absolute; bottom: 40px; left: 40px; width: 120px; height: 120px; background: rgba(255,255,255,0.1); border: 2px solid #fff; border-radius: 50%; pointer-events: auto; }
@@ -32,12 +33,35 @@
         #jump-btn { bottom: 45px; right: 145px; background: rgba(0,150,255,0.8); }
         
         #death-screen { display: none; background: rgba(150,0,0,0.85); z-index: 200; }
+        
+        /* Картинка оружия в правом нижнем углу */
+        #weapon-overlay { position: fixed; bottom: -200px; right: -30px; width: 70vw; max-width: 800px; pointer-events: none; z-index: 55; display: none; }
+        
+        /* Кнопка выхода */
+        #exit-btn { position: fixed; top: 15px; right: 15px; background: rgba(200,0,0,0.8); color: white; border: 2px solid #ff4444; border-radius: 10px; padding: 8px 18px; font-size: 14px; font-weight: bold; cursor: pointer; pointer-events: auto; z-index: 200; text-transform: uppercase; transition: 0.2s; font-family: 'Arial Black', sans-serif; }
+        #exit-btn:hover { background: rgba(255,0,0,0.9); transform: scale(1.05); }
+        #exit-btn:active { transform: scale(0.95); }
+        
+        /* Лог событий слева снизу */
+        #event-log { position: fixed; bottom: 20px; left: 20px; z-index: 55; pointer-events: none; display: none; }
+        .event-msg { background: rgba(0,0,0,0.7); color: #ff6666; padding: 6px 14px; border-radius: 8px; font-size: 14px; font-family: 'Arial Black', sans-serif; margin-top: 5px; border-left: 3px solid #ff4444; animation: fadeInOut 4s forwards; }
+        @keyframes fadeInOut { 0% { opacity: 0; transform: translateX(-20px); } 10% { opacity: 1; transform: translateX(0); } 80% { opacity: 1; } 100% { opacity: 0; transform: translateX(-20px); } }
     </style>
 </head>
 <body>
     <div id="lobby-screen" class="screen"><div class="menu-box"><h1 style="color: #ff9000;">HAMBURGER STRIKE</h1><input type="text" id="nick-input" placeholder="ТВОЙ НИКНЕЙМ"><input type="text" id="join-id" placeholder="ID ЛОББИ ДЛЯ ВХОДА"><button class="btn" style="background: #ff9000;" onclick="startLobby(true)">СОЗДАТЬ СЕРВЕР</button><button class="btn" style="background: #333;" onclick="startLobby(false)">ПРИСОЕДИНИТЬСЯ</button></div></div>
-    <div id="team-screen" class="screen" style="display:none;"><div class="menu-box"><h2>ВЫБЕРИ СВОЮ ИМПЕРИЮ</h2><button class="btn" style="background:#502d16; color:#ed7801; border: 3px solid #f5ebdc;" onclick="selectTeam('BK')">BURGER KING</button><button class="btn" style="background:#bd0017; color:#ffbc0d; border: 3px solid #ffbc0d;" onclick="selectTeam('MCD')">McDONALD'S</button></div></div>
+    <div id="team-screen" class="screen" style="display:none;"><div class="menu-box"><h2>ГОТОВ?</h2><button class="btn" style="background:#ff9000;" onclick="selectTeam()">ИГРАТЬ</button></div></div>
     <div id="death-screen" class="screen"><div class="menu-box"><h1 style="font-size: 45px;">ВЫ УМЕРЛИ</h1><button class="btn" style="background: #ff9000;" onclick="respawn()">ВОЗРОДИТЬСЯ</button></div></div>
+    <button id="exit-btn" onclick="exitGame()" style="display:none;">✕ ВЫХОД</button>
+    <!-- SVG фильтр для удаления белого/светлого фона -->
+    <svg style="display: none;">
+        <defs>
+            <filter id="remove-white-bg">
+                <feColorMatrix type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 18 -7"/>
+            </filter>
+        </defs>
+    </svg>
+    
     <div id="game-ui">
         <div id="crosshair"></div>
         <div id="copy-panel" onclick="copyID()"><span style="font-size: 10px; color: #ff9000; display: block;">ID ЛОББИ:</span><span id="id-text" style="font-size: 18px; color: #fff;">...</span><div style="font-size: 9px; color: #aaa; margin-top: 3px;">(КЛИКНИ)</div></div>
@@ -48,35 +72,83 @@
             <div id="jump-btn" class="action-btn">⬆️</div>
         </div>
     </div>
+    <img id="weapon-overlay" src="awp.png" alt="weapon">
+    <div id="event-log"></div>
 
     <script type="importmap">{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js", "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/" } }</script>
     <script type="module">
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
-        let scene, camera, renderer, mapModel, peer, conn, myNick;
+        let scene, camera, renderer, mapModel, peer, conn, myNick, awpModel;
+        let awpSound = new Audio('awp1.mp3');
+        let headshotSound = new Audio('headshot1.mp3');
+        let connections = []; // Все подключения (для хоста)
+        let hostId = null; // ID хоста (для присоединившихся)
         let moveDir = { x: 0, z: 0 }, yaw = 0, pitch = 0;
         let otherPlayers = {};
         let myTeam = null, myHP = 100, isDead = false;
         let vy = 0, onGround = false;
-        const pHeight = 200, pSpeed = 16, gravity = -0.7, jumpPower = 14;
+        const pHeight = 200, gravity = -0.7, jumpPower = 14;
+
+        // === BHOP СИСТЕМА ===
+        // Горизонтальная скорость (velocity-based движение)
+        let velX = 0, velZ = 0; // мировые координаты скорости
+        const baseSpeed = 15;        // базовая скорость на земле (300 на HUD)
+        const groundAccel = 50;      // ускорение на земле — быстрый разгон до базовой
+        const airAccel = 60;         // ускорение в воздухе — плавный набор через bhop (~10 сек до макс)
+        const maxAirSpeed = 1.8;     // макс. проекция скорости на направление стрейфа
+        const groundFriction = 0.88; // трение на земле
+        const airFriction = 0.999;   // почти нет трения в воздухе
+        const maxBhopSpeed = 30;     // максимальная скорость банихопа (600 на HUD)
+        const bhopSpeedCap = 30;     // жёсткий лимит скорости (600 на HUD) — не разгоняется дальше
+        let lastYaw = 0;             // предыдущий yaw для определения поворота мыши
+        let keys = {};               // клавиши
+        let mobileJumpHeld = false;  // зажата ли кнопка прыжка на мобилке
+        let currentSpeed = 0;        // текущая скорость для HUD
+        let bhopStreakTime = 0;      // время серии банихопов
+        let lastGroundTime = 0;      // когда последний раз были на земле
+        let wasOnGround = false;     // были ли на земле в прошлом кадре
         const loader = new GLTFLoader();
+
+        // XSS защита - экранирование HTML
+        function escapeHtml(text) {
+            if(typeof text !== 'string') return '';
+            return text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
 
         // Определение ПК или Мобилка
         const isMobile = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
         if(isMobile) document.getElementById('mobile-controls').style.display = 'block';
 
         window.startLobby = (isHost) => {
-            myNick = document.getElementById('nick-input').value.trim() || "Игрок";
-            initPeer(isHost ? null : document.getElementById('join-id').value.trim());
+            // XSS защита - экранируем ввод
+            const rawNick = document.getElementById('nick-input').value;
+            const rawJoinId = document.getElementById('join-id').value;
+            myNick = escapeHtml(rawNick.trim()) || "Игрок";
+            // Ограничение длины ника
+            if(myNick.length > 20) myNick = myNick.substring(0, 20);
+            // Очищаем старые подключения при новой игре
+            connections = [];
+            conn = null;
+            otherPlayers = {};
+            initPeer(isHost ? null : escapeHtml(rawJoinId.trim()));
             document.getElementById('lobby-screen').style.display = 'none';
             document.getElementById('team-screen').style.display = 'flex';
         };
 
         window.selectTeam = (team) => {
-            myTeam = team;
+            myTeam = 'single'; // режим смерти - одна команда
             document.getElementById('team-screen').style.display = 'none';
             document.getElementById('game-ui').style.display = 'block';
+            document.getElementById('weapon-overlay').style.display = 'block';
+            document.getElementById('event-log').style.display = 'block';
+            document.getElementById('exit-btn').style.display = 'block';
             initThree();
             if(!isMobile) renderer.domElement.requestPointerLock();
         };
@@ -89,19 +161,217 @@
         function initPeer(targetId) {
             peer = new Peer();
             peer.on('open', (id) => {
-                document.getElementById('id-text').innerText = id;
-                if(targetId) { conn = peer.connect(targetId); setupConn(); }
+                if(targetId) {
+                    // Мы присоединяемся к хосту
+                    hostId = targetId;
+                    document.getElementById('id-text').innerText = targetId; // Показываем ID хоста
+                    conn = peer.connect(targetId); 
+                    setupConn();
+                } else {
+                    // Мы хост
+                    document.getElementById('id-text').innerText = id;
+                }
             });
-            peer.on('connection', (c) => { conn = c; setupConn(); });
+            peer.on('connection', (c) => { 
+                // Хост принимает новое подключение
+                connections.push(c);
+                conn = c; // Основное подключение для отправки
+                setupHostConn(c); 
+            });
         }
 
         function setupConn() {
+            conn.on('open', () => {
+                // Отправляем информацию о себе хосту при подключении
+                if(conn && conn.open) {
+                    conn.send({
+                        type: 'player_joined',
+                        id: peer.id,
+                        nick: escapeHtml(myNick.substring(0, 20)), // XSS защита
+                        team: myTeam,
+                        pos: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+                        yaw: yaw
+                    });
+                }
+            });
             conn.on('data', (data) => {
+                if(data.type === 'player_joined') {
+                    // Новый игрок присоединился к хосту
+                    updateOtherPlayer(data);
+                }
                 if(data.type === 'move') updateOtherPlayer(data);
-                if(data.type === 'hit' && data.targetId === peer.id) takeDamage(10);
+                if(data.type === 'headshot') {
+                    // Проверяем, является ли игрок целевой жертвой
+                    if(data.targetId === peer.id) {
+                        headshotSound.currentTime = 0;
+                        headshotSound.play();
+                        takeDamage(100);
+                    }
+                }
+                if(data.type === 'kill') {
+                    // Если нас убили - применяем урон
+                    if(data.targetId === peer.id) {
+                        headshotSound.currentTime = 0;
+                        headshotSound.play();
+                        takeDamage(100);
+                    }
+                }
+                if(data.type === 'hit' && data.targetId === peer.id) takeDamage(100);
                 if(data.type === 'spark') createSparks(data.pos, false);
+                if(data.type === 'death') playDeathAnimation(data.id, data.pos);
+                if(data.type === 'respawn') handlePlayerRespawn(data.id);
+                if(data.type === 'disconnect') {
+                    addEventMessage(data.nick + ' вышел из игры');
+                    playDeathAnimation(data.id, data.pos);
+                }
             });
         }
+
+        // Настройка подключения для хоста (для приёма данных от игроков)
+        function setupHostConn(c) {
+            c.on('data', (data) => {
+                if(data.type === 'player_joined') {
+                    // XSS защита - экранируем ник
+                    data.nick = escapeHtml(data.nick ? data.nick.substring(0, 20) : 'Игрок');
+                    // Новый игрок присоединился - добавляем и рассылаем всем
+                    updateOtherPlayer(data);
+                    connections.forEach(conn => {
+                        if(conn !== c && conn.open) conn.send(data);
+                    });
+                }
+                if(data.type === 'move') {
+                    // XSS защита - экранируем ник пришедший от игрока
+                    data.nick = escapeHtml(data.nick ? data.nick.substring(0, 20) : 'Игрок');
+                    updateOtherPlayer(data);
+                    connections.forEach(conn => {
+                        if(conn !== c && conn.open) conn.send(data);
+                    });
+                }
+                if(data.type === 'headshot') {
+                    // Проверяем, является ли игрок целевой жертвой
+                    if(data.targetId === peer.id) {
+                        headshotSound.currentTime = 0;
+                        headshotSound.play();
+                        takeDamage(100);
+                    }
+                    // Пересылаем попадание всем
+                    connections.forEach(conn => {
+                        if(conn.open) conn.send(data);
+                    });
+                }
+                if(data.type === 'kill') {
+                    // Если нас убили - применяем урон
+                    if(data.targetId === peer.id) {
+                        headshotSound.currentTime = 0;
+                        headshotSound.play();
+                        takeDamage(100);
+                    }
+                    // Пересылаем всем
+                    connections.forEach(conn => {
+                        if(conn.open) conn.send(data);
+                    });
+                }
+                if(data.type === 'spark') {
+                    createSparks(data.pos, false);
+                    connections.forEach(conn => {
+                        if(conn.open) conn.send(data);
+                    });
+                }
+                if(data.type === 'death') {
+                    playDeathAnimation(data.id, data.pos);
+                    connections.forEach(conn => {
+                        if(conn.open) conn.send(data);
+                    });
+                }
+                if(data.type === 'respawn') {
+                    handlePlayerRespawn(data.id);
+                    connections.forEach(conn => {
+                        if(conn.open) conn.send(data);
+                    });
+                }
+                if(data.type === 'disconnect') {
+                    // XSS защита
+                    data.nick = escapeHtml(data.nick ? data.nick.substring(0, 20) : 'Игрок');
+                    addEventMessage(data.nick + ' вышел из игры');
+                    playDeathAnimation(data.id, data.pos);
+                    connections = connections.filter(conn => conn !== c);
+                    connections.forEach(conn => {
+                        if(conn.open) conn.send(data);
+                    });
+                }
+            });
+            c.on('open', () => {
+                // При новом подключении игрока, отправляем его информацию хосту
+                c.send({
+                    type: 'player_joined',
+                    id: c.peer, // ID нового игрока
+                    nick: 'Игрок', // Имя будет обновлено при первом move
+                    team: myTeam,
+                    pos: { x: 0, y: 500, z: 0 },
+                    yaw: 0
+                });
+            });
+        }
+
+        // Функция добавления сообщения в лог событий (слева снизу)
+        function addEventMessage(text) {
+            const log = document.getElementById('event-log');
+            const msg = document.createElement('div');
+            msg.className = 'event-msg';
+            // XSS защита - экранируем текст
+            msg.textContent = '⚠ ' + escapeHtml(text);
+            log.appendChild(msg);
+            // Удаляем сообщение после анимации (4 секунды)
+            setTimeout(() => { if(msg.parentNode) msg.parentNode.removeChild(msg); }, 4200);
+        }
+
+        // Функция выхода из игры
+        window.exitGame = () => {
+            if(isDead) return;
+            // Отправляем сообщение о выходе другим игрокам (с анимацией смерти)
+            if(conn && conn.open) {
+                if(connections.length > 0) {
+                    connections.forEach(c => {
+                        if(c.open) c.send({ type: 'disconnect', id: peer.id, nick: escapeHtml(myNick), pos: { x: camera.position.x, y: camera.position.y, z: camera.position.z } });
+                    });
+                } else {
+                    conn.send({ type: 'disconnect', id: peer.id, nick: escapeHtml(myNick), pos: { x: camera.position.x, y: camera.position.y, z: camera.position.z } });
+                }
+            }
+            // Показываем сообщение локально
+            addEventMessage(myNick + ' вышел из игры');
+            // Запускаем анимацию смерти для себя (камера падает)
+            isDead = true;
+            let exitFallSpeed = 0;
+            let exitRotSpeed = 0;
+            const exitAnim = setInterval(() => {
+                exitFallSpeed += 0.5;
+                exitRotSpeed += 0.001;
+                camera.position.y -= exitFallSpeed;
+                camera.rotation.z += exitRotSpeed;
+                // Красный оверлей
+                document.getElementById('hp-fill').style.width = "0%";
+                if(exitFallSpeed > 30) {
+                    clearInterval(exitAnim);
+                    // Скрываем игровой UI и показываем лобби
+                    document.getElementById('game-ui').style.display = 'none';
+                    document.getElementById('weapon-overlay').style.display = 'none';
+                    document.getElementById('exit-btn').style.display = 'none';
+                    document.getElementById('death-screen').style.display = 'none';
+                    document.getElementById('lobby-screen').style.display = 'flex';
+                    if(!isMobile) document.exitPointerLock();
+                    // Сброс состояния
+                    isDead = false;
+                    myHP = 100;
+                    myTeam = null;
+                    velX = 0; velZ = 0; vy = 0;
+                    camera.rotation.z = 0;
+                    if(conn) conn.close();
+                    if(peer) peer.destroy();
+                    conn = null; peer = null;
+                }
+            }, 1000/60);
+        };
 
         function initThree() {
             scene = new THREE.Scene();
@@ -112,6 +382,12 @@
             renderer.setSize(window.innerWidth, window.innerHeight);
             document.body.appendChild(renderer.domElement);
             scene.add(new THREE.AmbientLight(0xffffff, 2.5));
+            // Добавляем направленный свет к камере, чтобы AWP всегда освещался
+            const camLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            camLight.position.set(0, 1, 1);
+            camera.add(camLight);
+            // Добавляем камеру в сцену сразу, чтобы дочерние объекты (AWP) отображались
+            scene.add(camera);
 
             loader.load('de_dust2_-_cs_map.glb', (gltf) => {
                 mapModel = gltf.scene;
@@ -121,36 +397,238 @@
                 scene.add(mapModel);
                 respawn();
             });
+
+            // Загрузка AWP — оружие в руках (прикреплено к камере) как в CS:GO
+            // Используем отдельную сцену и камеру для viewmodel (как в CS:GO — оружие рендерится отдельно)
+            const weaponScene = new THREE.Scene();
+            weaponScene.add(new THREE.AmbientLight(0xffffff, 2.5));
+            const weaponDirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            weaponDirLight.position.set(1, 1, 1);
+            weaponScene.add(weaponDirLight);
+            const weaponCamera = new THREE.PerspectiveCamera(70, window.innerWidth/window.innerHeight, 0.1, 1000);
+
+            loader.load('awp.glb', (gltf) => {
+                awpModel = gltf.scene;
+                console.log('AWP loaded:', awpModel);
+                // Масштаб оружия (подобран для viewmodel камеры с near=0.1)
+                awpModel.scale.set(0.85, 0.85, 0.85);
+                // Позиция: правая нижняя часть экрана, ствол вперёд (CS:GO стиль)
+                awpModel.position.set(0.65, -0.85, -0.65);
+                // Поворот: ствол смотрит вперёд
+                awpModel.rotation.set(0.18, -Math.PI / 2 + 0.03, -0.02);
+                // Принудительно делаем все материалы видимыми
+                awpModel.traverse((child) => {
+                    if (child.isMesh) {
+                        child.frustumCulled = false;
+                        if (child.material) {
+                            child.material.side = THREE.DoubleSide;
+                        }
+                    }
+                });
+                weaponScene.add(awpModel);
+                console.log('AWP added to weapon scene');
+            }, (progress) => {
+                console.log('AWP loading:', (progress.loaded / progress.total * 100).toFixed(1) + '%');
+            }, (error) => {
+                console.error('AWP load error:', error);
+            });
             setupControls();
             animate();
         }
 
         window.respawn = () => {
             isDead = false; myHP = 100; vy = 0;
+            velX = 0; velZ = 0;
+            bhopStreakTime = 0;
             document.getElementById('hp-fill').style.width = "100%";
             document.getElementById('death-screen').style.display = 'none';
-            camera.position.set(0, 500, myTeam === 'BK' ? 2600 : -2600);
-            yaw = (myTeam === 'BK') ? 0 : Math.PI;
+            
+            // Рандомные позиции респауна на de_dust2 (по центру карты)
+            const spawnPoints = [
+                { x: 0, z: 0 },
+                { x: 500, z: 500 },
+                { x: -500, z: -500 },
+                { x: 500, z: -500 },
+                { x: -500, z: 500 },
+                { x: 1000, z: 0 },
+                { x: -1000, z: 0 },
+                { x: 0, z: 1000 },
+                { x: 0, z: -1000 }
+            ];
+            const spawn = spawnPoints[Math.floor(Math.random() * spawnPoints.length)];
+            camera.position.set(spawn.x, 500, spawn.z);
+            yaw = Math.random() * Math.PI * 2;
+            
+            if(conn && conn.open) {
+                if(connections.length > 0) {
+                    connections.forEach(c => {
+                        if(c.open) c.send({ type: 'respawn', id: peer.id });
+                    });
+                } else {
+                    conn.send({ type: 'respawn', id: peer.id });
+                }
+            }
         };
 
         function takeDamage(dmg) {
             if(isDead) return;
             myHP -= dmg;
             document.getElementById('hp-fill').style.width = myHP + "%";
-            if(myHP <= 0) { isDead = true; document.getElementById('death-screen').style.display = 'flex'; if(!isMobile) document.exitPointerLock(); }
+            if(myHP <= 0) {
+                isDead = true;
+                // Отправляем сообщение о смерти другим игрокам
+                if(conn && conn.open) {
+                    if(connections.length > 0) {
+                        connections.forEach(c => {
+                            if(c.open) c.send({ type: 'death', id: peer.id, pos: { x: camera.position.x, y: camera.position.y, z: camera.position.z } });
+                        });
+                    } else {
+                        conn.send({ type: 'death', id: peer.id, pos: { x: camera.position.x, y: camera.position.y, z: camera.position.z } });
+                    }
+                }
+                // Показываем экран смерти с задержкой, чтобы увидеть анимацию
+                setTimeout(() => {
+                    document.getElementById('death-screen').style.display = 'flex';
+                    if(!isMobile) document.exitPointerLock();
+                }, 2500);
+            }
+        }
+
+        // Создание крыльев ангела из геометрии
+        function createWings() {
+            const wingGroup = new THREE.Group();
+            const wingShape = new THREE.Shape();
+            // Левое крыло
+            wingShape.moveTo(0, 0);
+            wingShape.bezierCurveTo(-80, 60, -200, 180, -120, 280);
+            wingShape.bezierCurveTo(-60, 220, -40, 140, -20, 100);
+            wingShape.bezierCurveTo(-10, 60, 0, 30, 0, 0);
+
+            const extrudeSettings = { depth: 5, bevelEnabled: true, bevelThickness: 2, bevelSize: 2, bevelSegments: 1 };
+            const wingGeo = new THREE.ExtrudeGeometry(wingShape, extrudeSettings);
+            const wingMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffcc, emissiveIntensity: 0.5, side: THREE.DoubleSide, transparent: true, opacity: 0.85 });
+
+            const leftWing = new THREE.Mesh(wingGeo, wingMat);
+            leftWing.position.set(-20, 0, 0);
+            leftWing.rotation.y = -0.3;
+            wingGroup.add(leftWing);
+
+            const rightWing = new THREE.Mesh(wingGeo, wingMat.clone());
+            rightWing.position.set(20, 0, 0);
+            rightWing.scale.x = -1;
+            rightWing.rotation.y = 0.3;
+            wingGroup.add(rightWing);
+
+            // Добавляем перья (маленькие плоскости)
+            const featherGeo = new THREE.PlaneGeometry(15, 40);
+            const featherMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffee, emissiveIntensity: 0.3, side: THREE.DoubleSide, transparent: true, opacity: 0.7 });
+            for(let i = 0; i < 12; i++) {
+                const feather = new THREE.Mesh(featherGeo, featherMat.clone());
+                const side = i < 6 ? -1 : 1;
+                const idx = i % 6;
+                feather.position.set(side * (40 + idx * 25), 50 + idx * 35, Math.random() * 10);
+                feather.rotation.z = side * (0.2 + idx * 0.15);
+                wingGroup.add(feather);
+            }
+
+            return wingGroup;
+        }
+
+        // Анимация смерти: модель серая + крылья + улетает вверх
+        function playDeathAnimation(playerId, deathPos) {
+            const player = otherPlayers[playerId];
+            if(!player) return;
+
+            // Помечаем игрока как мёртвого
+            player.isDead = true;
+
+            const model = player.model;
+            const label = player.label;
+
+            // Делаем модель серой
+            model.traverse((child) => {
+                if(child.isMesh && child.material) {
+                    const mat = child.material.clone();
+                    mat.color = new THREE.Color(0x888888);
+                    mat.emissive = new THREE.Color(0x222222);
+                    child.material = mat;
+                }
+            });
+
+            // Создаём крылья и добавляем к модели
+            const wings = createWings();
+            wings.scale.set(1.5, 1.5, 1.5);
+            wings.position.set(0, 200, -30);
+            model.add(wings);
+
+            // Добавляем нимб (кольцо над головой)
+            const haloGeo = new THREE.TorusGeometry(60, 8, 8, 32);
+            const haloMat = new THREE.MeshStandardMaterial({ color: 0xffdd00, emissive: 0xffaa00, emissiveIntensity: 1.0 });
+            const halo = new THREE.Mesh(haloGeo, haloMat);
+            halo.position.set(0, 380, 0);
+            halo.rotation.x = Math.PI / 2;
+            model.add(halo);
+
+            // Свечение вокруг
+            const glowGeo = new THREE.SphereGeometry(200, 16, 16);
+            const glowMat = new THREE.MeshBasicMaterial({ color: 0xffffcc, transparent: true, opacity: 0.15 });
+            const glow = new THREE.Mesh(glowGeo, glowMat);
+            glow.position.set(0, 150, 0);
+            model.add(glow);
+
+            // Анимация улёта вверх
+            let flySpeed = 0;
+            let wingAngle = 0;
+            const flyInterval = setInterval(() => {
+                flySpeed += 0.3;
+                model.position.y += flySpeed;
+                if(label) label.position.y += flySpeed;
+
+                // Анимация взмахов крыльев
+                wingAngle += 0.15;
+                if(wings.children[0]) wings.children[0].rotation.y = -0.3 + Math.sin(wingAngle) * 0.4;
+                if(wings.children[1]) wings.children[1].rotation.y = 0.3 - Math.sin(wingAngle) * 0.4;
+
+                // Лёгкое вращение
+                model.rotation.y += 0.02;
+
+                // Постепенное уменьшение прозрачности свечения
+                if(glow.material.opacity > 0.01) glow.material.opacity *= 0.995;
+
+                // Удаляем через 4 секунды
+                if(model.position.y > deathPos.y + 5000) {
+                    clearInterval(flyInterval);
+                    scene.remove(model);
+                    if(label) scene.remove(label);
+                    delete otherPlayers[playerId];
+                }
+            }, 1000/60);
+        }
+
+        // Обработка респауна игрока
+        function handlePlayerRespawn(playerId) {
+            const player = otherPlayers[playerId];
+            if(player) {
+                player.isDead = false;
+            }
         }
 
         function updateOtherPlayer(data) {
             if(!otherPlayers[data.id]) {
                 const group = new THREE.Group();
+                // Начальная позиция - под картой (скрыта)
+                group.position.set(0, -10000, 0);
                 scene.add(group);
                 const nick = createNickLabel(data.nick);
+                nick.position.set(0, -10000, 0);
                 scene.add(nick);
-                otherPlayers[data.id] = { model: group, label: nick, team: data.team };
-                const file = data.team === 'BK' ? 'burgerking.glb' : 'fripotato.glb';
-                loader.load(file, (gltf) => {
+                otherPlayers[data.id] = { model: group, label: nick, team: data.team, isDead: false };
+                // Все игроки используют один скин - toxa.glb
+                loader.load('toxa.glb', (gltf) => {
                     const m = gltf.scene;
-                    data.team === 'BK' ? m.scale.set(400, 400, 400) : m.scale.set(4800, 4800, 4800);
+                    m.scale.set(400, 400, 400);
+                    // Поворачиваем модель на 360 градусов
+                    m.rotation.y = Math.PI * 2;
                     group.add(m);
                 });
             } else {
@@ -158,6 +636,7 @@
                 p.model.position.set(data.pos.x, data.pos.y - pHeight, data.pos.z);
                 p.model.rotation.y = data.yaw;
                 p.label.position.set(data.pos.x, data.pos.y + 250, data.pos.z);
+                p.team = data.team;
             }
         }
 
@@ -166,7 +645,9 @@
             const ctx = canvas.getContext('2d');
             canvas.width = 512; canvas.height = 128;
             ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0, 0, 512, 128);
-            ctx.font = 'bold 70px Arial'; ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.fillText(text, 256, 90);
+            // XSS защита - экранируем никнейм при отображении
+            const safeText = escapeHtml(text);
+            ctx.font = 'bold 70px Arial'; ctx.fillStyle = 'white'; ctx.textAlign = 'center'; ctx.fillText(safeText, 256, 90);
             const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas) }));
             sprite.scale.set(200, 50, 1); return sprite;
         }
@@ -181,39 +662,223 @@
             }
             if(isMine && conn && conn.open) {
                 conn.send({ type: 'spark', pos: pos });
+                
+                // Направление выстрела
+                const shootDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+                
+                // Проверяем всех игроков и находим БЛИЖАЙШЕГО
+                let closestDist = Infinity;
+                let targetId = null;
+                const myId = peer.id;
+                
                 Object.keys(otherPlayers).forEach(id => {
-                    if(otherPlayers[id].team !== myTeam && pos.distanceTo(otherPlayers[id].model.position) < 320) conn.send({ type: 'hit', targetId: id });
+                    const player = otherPlayers[id];
+                    if(player.isDead || id === myId) return;
+                    
+                    // Позиция игрока
+                    const enemyPos = new THREE.Vector3(
+                        player.model.position.x,
+                        player.model.position.y + 200,
+                        player.model.position.z
+                    );
+                    
+                    const toEnemy = enemyPos.clone().sub(camera.position);
+                    const projected = toEnemy.dot(shootDir);
+                    
+                    if(projected > 0) {
+                        const closestPoint = camera.position.clone().add(shootDir.clone().multiplyScalar(projected));
+                        const dist = closestPoint.distanceTo(enemyPos);
+                        
+                        // Находим ближайшего
+                        if(dist < 800 && projected < closestDist) {
+                            closestDist = projected;
+                            targetId = id;
+                        }
+                    }
                 });
+                
+                if(targetId) {
+                    headshotSound.currentTime = 0;
+                    headshotSound.play();
+                    conn.send({ type: 'kill', killerId: myId, targetId: targetId });
+                }
             }
+        }
+
+        // Source-engine style air acceleration
+        function airStrafe(velX, velZ, wishDirX, wishDirZ, accel, maxSpeed, dt) {
+            // Проекция текущей скорости на желаемое направление
+            const currentProj = velX * wishDirX + velZ * wishDirZ;
+            // Сколько можно добавить
+            let addSpeed = maxSpeed - currentProj;
+            if (addSpeed <= 0) return { x: velX, z: velZ };
+            // Ускорение
+            let accelSpeed = accel * dt * maxSpeed;
+            if (accelSpeed > addSpeed) accelSpeed = addSpeed;
+            return {
+                x: velX + accelSpeed * wishDirX,
+                z: velZ + accelSpeed * wishDirZ
+            };
         }
 
         function animate() {
             requestAnimationFrame(animate);
             if(!isDead && mapModel) {
-                vy += gravity; camera.position.y += vy;
+                const dt = 1.0; // фиксированный тик
+
+                // --- Гравитация ---
+                vy += gravity;
+                camera.position.y += vy;
                 if (camera.position.y < -3000) respawn();
 
+                // --- Определение земли ---
                 const downRay = new THREE.Raycaster(camera.position, new THREE.Vector3(0,-1,0));
                 const hits = downRay.intersectObject(mapModel, true);
+                let prevOnGround = onGround;
                 if(hits.length > 0) {
                     const floorY = hits[0].point.y + pHeight;
-                    if(camera.position.y <= floorY) { camera.position.y = floorY; vy = 0; onGround = true; } else { onGround = false; }
+                    if(camera.position.y <= floorY) {
+                        camera.position.y = floorY;
+                        vy = 0;
+                        onGround = true;
+                    } else {
+                        onGround = false;
+                    }
+                } else {
+                    onGround = false;
                 }
 
-                if(moveDir.x || moveDir.z) {
-                    const forward = new THREE.Vector3(0,0,-1).applyQuaternion(camera.quaternion);
-                    forward.y = 0; forward.normalize();
-                    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0,1,0)).normalize();
-                    const oldPos = camera.position.clone();
-                    camera.position.addScaledVector(forward, -moveDir.z * pSpeed);
-                    camera.position.addScaledVector(right, moveDir.x * pSpeed);
-                    const sideRay = new THREE.Raycaster(oldPos, camera.position.clone().sub(oldPos).normalize(), 0, 70);
-                    if(sideRay.intersectObject(mapModel, true).length > 0) camera.position.copy(oldPos);
+                // --- Автопрыжок (bhop): если Space зажат (ПК) или кнопка прыжка зажата (мобилка) ---
+                if (onGround && (keys['Space'] || mobileJumpHeld) && !isDead) {
+                    vy = jumpPower;
+                    onGround = false;
+                    // Небольшое сохранение скорости при банихопе
+                    bhopStreakTime += 1;
+                    lastGroundTime = performance.now();
                 }
-                if(conn && conn.open) conn.send({ type: 'move', id: peer.id, nick: myNick, team: myTeam, pos: camera.position, yaw: yaw });
+
+                // --- Направления камеры ---
+                const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+                forward.y = 0; forward.normalize();
+                const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+
+                // --- Определяем желаемое направление из клавиш (ПК) или джойстика (мобилка) ---
+                let inputX, inputZ;
+                if (isMobile) {
+                    // На мобилке: moveDir.x = лево/право, moveDir.z = вперёд/назад (от джойстика)
+                    // moveDir.z положительный = джойстик вниз (назад), отрицательный = вверх (вперёд)
+                    inputX = moveDir.x;       // стрейф из джойстика
+                    inputZ = moveDir.z;       // вперёд/назад из джойстика
+                } else {
+                    inputX = (keys['KeyD'] ? 1 : 0) - (keys['KeyA'] ? 1 : 0); // стрейф
+                    inputZ = (keys['KeyS'] ? 1 : 0) - (keys['KeyW'] ? 1 : 0); // вперёд/назад
+                }
+
+                // Желаемое направление в мировых координатах
+                // На мобилке: джойстик вверх = вперёд (inputZ < 0 от atan2), поэтому -inputZ = вперёд
+                let wishX = right.x * inputX + forward.x * (-inputZ);
+                let wishZ = right.z * inputX + forward.z * (-inputZ);
+                const wishLen = Math.sqrt(wishX * wishX + wishZ * wishZ);
+                if (wishLen > 0) { wishX /= wishLen; wishZ /= wishLen; }
+
+                if (onGround) {
+                    // === ДВИЖЕНИЕ НА ЗЕМЛЕ ===
+                    // Трение
+                    velX *= groundFriction;
+                    velZ *= groundFriction;
+
+                    // Ускорение на земле
+                    if (wishLen > 0) {
+                        const speed = Math.sqrt(velX * velX + velZ * velZ);
+                        const targetSpeed = baseSpeed;
+                        const currentProj = velX * wishX + velZ * wishZ;
+                        let addSpeed = targetSpeed - currentProj;
+                        if (addSpeed > 0) {
+                            let accelAmount = groundAccel * dt * targetSpeed;
+                            if (accelAmount > addSpeed) accelAmount = addSpeed;
+                            velX += accelAmount * wishX;
+                            velZ += accelAmount * wishZ;
+                        }
+                    }
+
+                    // Сброс серии банихопов если стоим на месте
+                    if (Math.sqrt(velX * velX + velZ * velZ) < 2) {
+                        bhopStreakTime = 0;
+                    }
+                } else {
+                    // === ДВИЖЕНИЕ В ВОЗДУХЕ (AIR STRAFE) ===
+                    // Минимальное трение в воздухе
+                    velX *= airFriction;
+                    velZ *= airFriction;
+
+                    if (wishLen > 0) {
+                        // Source-engine air strafing
+                        const result = airStrafe(velX, velZ, wishX, wishZ, airAccel, maxAirSpeed, dt * 0.016);
+                        velX = result.x;
+                        velZ = result.z;
+                    }
+                }
+
+                // --- Ограничение максимальной скорости ---
+                const hSpeed = Math.sqrt(velX * velX + velZ * velZ);
+                if (hSpeed > bhopSpeedCap) {
+                    // Мягкое ограничение — плавно снижаем до лимита
+                    const dampFactor = bhopSpeedCap / hSpeed;
+                    velX *= dampFactor;
+                    velZ *= dampFactor;
+                }
+
+                // --- Применяем скорость ---
+                const oldPos = camera.position.clone();
+                camera.position.x += velX;
+                camera.position.z += velZ;
+
+                // --- Коллизия со стенами ---
+                const moveVec = camera.position.clone().sub(oldPos);
+                const moveDist = moveVec.length();
+                if (moveDist > 0.01) {
+                    const sideRay = new THREE.Raycaster(oldPos, moveVec.normalize(), 0, Math.max(moveDist + 30, 70));
+                    if (sideRay.intersectObject(mapModel, true).length > 0) {
+                        camera.position.copy(oldPos);
+                        // При столкновении со стеной — гасим скорость
+                        velX *= 0.1;
+                        velZ *= 0.1;
+                        bhopStreakTime = 0;
+                    }
+                }
+
+                // --- Обновляем текущую скорость ---
+                currentSpeed = Math.sqrt(velX * velX + velZ * velZ);
+
+                // Запоминаем yaw для следующего кадра
+                lastYaw = yaw;
+
+                if(conn && conn.open) {
+                    // Если это хост (connections.length > 0), рассылаем всем
+                    if(connections.length > 0) {
+                        connections.forEach(c => {
+                            if(c.open) c.send({ type: 'move', id: peer.id, nick: escapeHtml(myNick), team: myTeam, pos: camera.position, yaw: yaw });
+                        });
+                    } else {
+                        // Обычный игрок - отправляем хосту
+                        conn.send({ type: 'move', id: peer.id, nick: escapeHtml(myNick), team: myTeam, pos: camera.position, yaw: yaw });
+                    }
+                }
             }
+            // Рендерим оружие поверх основной сцены (как viewmodel в CS:GO)
+            renderer.autoClear = true;
             renderer.render(scene, camera);
+            if (awpModel) {
+                // Синхронизируем поворот weaponCamera с основной камерой
+                weaponCamera.rotation.copy(camera.rotation);
+                weaponCamera.rotation.order = camera.rotation.order;
+                renderer.autoClear = false;
+                renderer.clearDepth();
+                renderer.render(weaponScene, weaponCamera);
+                renderer.autoClear = true;
+            }
         }
+
 
         function setupControls() {
             if(isMobile) {
@@ -226,20 +891,56 @@
                     moveDir = { x: Math.cos(a)*(d/40), z: Math.sin(a)*(d/40) };
                 };
                 j.ontouchend = () => { s.style.transform = 'translate(0,0)'; moveDir = {x:0, z:0}; };
-                document.getElementById('jump-btn').ontouchstart = () => { if(onGround && !isDead) vy = jumpPower; };
+                // Зажатие кнопки прыжка = auto-bhop (как Space на ПК)
+                document.getElementById('jump-btn').ontouchstart = () => { mobileJumpHeld = true; };
+                document.getElementById('jump-btn').ontouchend = () => { mobileJumpHeld = false; };
                 document.getElementById('attack-btn').ontouchstart = () => {
-                    if(!isDead) createSparks(camera.position.clone().add(new THREE.Vector3(0,-60,-120).applyQuaternion(camera.quaternion)), true);
+                    if(!isDead) {
+                        awpSound.currentTime = 0;
+                        awpSound.play();
+                        createSparks(camera.position.clone().add(new THREE.Vector3(0,-60,-120).applyQuaternion(camera.quaternion)), true);
+                    }
                 };
+                let camTouchId = null; // ID пальца для управления камерой
                 let lx = 0, ly = 0;
-                window.addEventListener('touchstart', (e) => { if(e.touches[0].clientX > window.innerWidth/2){ lx=e.touches[0].clientX; ly=e.touches[0].clientY; }});
+                window.addEventListener('touchstart', (e) => { 
+                    // Ищем палец в правой половине экрана, который ещё не используется для камеры
+                    const t = Array.from(e.touches).find(t => t.clientX > window.innerWidth/2 && t.identifier !== camTouchId);
+                    if(t && camTouchId === null) { 
+                        camTouchId = t.identifier;
+                        lx = t.clientX; 
+                        ly = t.clientY; 
+                    }
+                });
                 window.addEventListener('touchmove', (e) => {
-                    const t = Array.from(e.touches).find(t => t.clientX > window.innerWidth/2);
-                    if(t) { yaw -= (t.clientX - lx) * 0.003; pitch = Math.max(-1.5, Math.min(1.5, pitch - (t.clientY - ly) * 0.003)); camera.rotation.set(pitch, yaw, 0, 'YXZ'); lx = t.clientX; ly = t.clientY; }
+                    // Ищем именно тот палец, который начал управление камерой
+                    const t = Array.from(e.touches).find(t => t.identifier === camTouchId);
+                    if(t) { 
+                        yaw -= (t.clientX - lx) * 0.003; 
+                        pitch = Math.max(-1.5, Math.min(1.5, pitch - (t.clientY - ly) * 0.003)); 
+                        camera.rotation.set(pitch, yaw, 0, 'YXZ'); 
+                        lx = t.clientX; 
+                        ly = t.clientY; 
+                    }
+                });
+                window.addEventListener('touchend', (e) => {
+                    // Если палец камеры был отпущен, сбрасываем ID
+                    if(camTouchId !== null) {
+                        const stillTouching = Array.from(e.touches).find(t => t.identifier === camTouchId);
+                        if(!stillTouching) camTouchId = null;
+                    }
                 });
             } else {
-                // ПК УПРАВЛЕНИЕ
-                const keys = {};
-                window.addEventListener('keydown', (e) => { keys[e.code] = true; if(e.code === 'Space' && onGround && !isDead) vy = jumpPower; });
+                // ПК УПРАВЛЕНИЕ с BHOP
+                window.addEventListener('keydown', (e) => {
+                    keys[e.code] = true;
+                    // Предотвращаем скролл страницы при Space
+                    if (e.code === 'Space') e.preventDefault();
+                    // Выход из игры по Escape или Q
+                    if ((e.code === 'Escape' || e.code === 'KeyQ') && !isDead && document.getElementById('game-ui').style.display !== 'none') {
+                        exitGame();
+                    }
+                });
                 window.addEventListener('keyup', (e) => keys[e.code] = false);
                 window.addEventListener('mousemove', (e) => {
                     if (document.pointerLockElement === renderer.domElement) {
@@ -248,14 +949,26 @@
                         camera.rotation.set(pitch, yaw, 0, 'YXZ');
                     }
                 });
-                window.addEventListener('mousedown', () => {
-                    if (document.pointerLockElement !== renderer.domElement) renderer.domElement.requestPointerLock();
-                    else if(!isDead) createSparks(camera.position.clone().add(new THREE.Vector3(0,-60,-120).applyQuaternion(camera.quaternion)), true);
+                // Обработка клика для выхода - работает даже при pointer lock через событие на canvas
+                document.body.addEventListener('click', (e) => {
+                    // Проверяем позицию мыши — если в правом верхнем углу, выходим
+                    const x = e.clientX / window.innerWidth;
+                    const y = e.clientY / window.innerHeight;
+                    if (x > 0.85 && y < 0.15 && !isDead && document.getElementById('game-ui').style.display !== 'none') {
+                        exitGame();
+                    }
                 });
-                setInterval(() => {
-                    moveDir.z = (keys['KeyW'] ? -1 : 0) + (keys['KeyS'] ? 1 : 0);
-                    moveDir.x = (keys['KeyA'] ? -1 : 0) + (keys['KeyD'] ? 1 : 0);
-                }, 1000/60);
+                
+                window.addEventListener('mousedown', (e) => {
+                    // Не перехватываем клики по кнопке выхода
+                    if (e.target.id === 'exit-btn' || e.target.closest('#exit-btn')) return;
+                    if (document.pointerLockElement !== renderer.domElement) renderer.domElement.requestPointerLock();
+                    else if(!isDead) {
+                        awpSound.currentTime = 0;
+                        awpSound.play();
+                        createSparks(camera.position.clone().add(new THREE.Vector3(0,-60,-120).applyQuaternion(camera.quaternion)), true);
+                    }
+                });
             }
         }
     </script>
